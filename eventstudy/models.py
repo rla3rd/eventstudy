@@ -5,39 +5,52 @@ import statsmodels.api as sm
 class Model:
 
     """
-    This 'Model' Class contains utils to run the modelisation of returns.
-    It can be used inside modelisation function.
-    A modelisation function takes the data needed to compute the model as parameters
-    and additionally must also takes as named parameters:
+    The Model Class holds various methods to run the various returns models
+    It takes the data needed to compute the model as parameters
+    and the following parameters:
         estimation_size: int,
-        event_window_size: int,
-        keep_model:bool = False
-    
-    A modelisation function must return (in this order):
-        residuals of the eventWindow: as an array (vector)
-        degree of freedom: as an integer
-        variance of the residuals: as an array (vector) of the same size than the residuals vector
+        event_window_size: int
+
+    Each method returns:
+        an array of residuals of the event window
+        the degrees of freedom
+        an array of the variance of the residuals
+        the model used
     """
 
     def __init__(
-        self, estimation_size: int, event_window_size: int, keep_model: bool = False
+        self, estimation_size: int, event_window_size: int
     ):
-
         self.estimation_size = estimation_size
         self.event_window_size = event_window_size
-        self.keep_model = keep_model
 
     def OLS(self, X, Y):
-
         X = sm.add_constant(X)  # add an intercept
-        reg = sm.OLS(Y[: self.estimation_size], X[: self.estimation_size]).fit()
-        residuals = np.array(Y) - reg.predict(X)
+        
+        # trim leading 0 returns from the dataset prior to regression
+        l = len(Y)
+        Yt = np.trim_zeros(Y)
+        lt = len(Yt)
+        lz = l - lt
+        Y = Yt
+        X = X[lz:, :]
+        if Y[: self.estimation_size].shape[0] > 0:
+            model = sm.OLS(Y[: self.estimation_size], X[: self.estimation_size]).fit()
+            residuals = np.array(Y) - model.predict(X)
+        else:
+            model = None
+            residuals = np.zeros(np.max([l, self.event_window_size]))
+        
         df = self.estimation_size - 1
         var = np.var(residuals[: self.estimation_size])
-        if self.keep_model:
-            return residuals[-self.event_window_size :], df, var, reg
-
-        return residuals[-self.event_window_size :], df, var
+        # if residual length is less than win_size after trimming
+        # we need to pad the front again so it returns the length 
+        # expected
+        if len(residuals) < self.event_window_size:
+            pad_size = self.event_window_size - len(residuals)
+            pad = np.zeros(pad_size)
+            residuals = np.concatenate([pad, residuals])
+        return residuals[-self.event_window_size :], df, var, model
 
 
 def market_model(
@@ -46,30 +59,20 @@ def market_model(
     *,  # Named arguments only
     estimation_size: int,
     event_window_size: int,
-    keep_model: bool = False,
     **kwargs
 ):
-    if keep_model:
-        residuals, df, var_res, model = Model(estimation_size, event_window_size, keep_model).OLS(
-            market_returns, security_returns
-        )
-        var = [var_res] * event_window_size
-
-        return residuals, df, var, model
-    else:
-        residuals, df, var_res = Model(estimation_size, event_window_size, keep_model).OLS(
-            market_returns, security_returns
-        )
-        var = [var_res] * event_window_size
-
-        return residuals, df, var
-
-    # var = var_res + 1/estimation_size * (1 +
-    #    ( (np.array(market_returns)[-event_window_size:] - np.mean(market_returns[:estimation_size]) )**2)
-    #     /np.var(market_returns[:estimation_size]))
+    X = np.array(market_returns)
+    Y = np.array(security_returns)
+    residuals, df, var_res, model = Model(
+        estimation_size,
+        event_window_size).OLS(
+            X,
+            Y)
+    var = [var_res] * event_window_size
+    return residuals, df, var, model
 
 
-def FamaFrench_3factor(
+def fama_french_3(
     security_returns,
     Mkt_RF,
     SMB,
@@ -78,56 +81,68 @@ def FamaFrench_3factor(
     *,  # Named arguments only
     estimation_size: int,
     event_window_size: int,
-    keep_model: bool = False,
     **kwargs
 ):
 
     RF = np.array(RF)
     Mkt_RF = np.array(Mkt_RF)
     security_returns = np.array(security_returns)
-
     X = np.column_stack((Mkt_RF, SMB, HML))
     Y = np.array(security_returns) - np.array(RF)
-
-    if keep_model:
-        residuals, df, var_res, model = Model(estimation_size, event_window_size, keep_model).OLS(
-            X, Y
-        )
-
-        var = [var_res] * event_window_size
-
-        return residuals, df, var, model
-    else:
-        residuals, df, var_res = Model(estimation_size, event_window_size, keep_model).OLS(
-            X, Y
-        )
-
-        var = [var_res] * event_window_size
-
-        return residuals, df, var
-
-
-def constant_mean(
+    residuals, df, var_res, model = Model(
+        estimation_size,
+        event_window_size).OLS(
+        X, Y)
+    var = [var_res] * event_window_size
+    return residuals, df, var, model
+   
+   
+def mean_adjusted_model(
     security_returns,
     *,  # Named arguments only
     estimation_size: int,
     event_window_size: int,
-    keep_model: bool = False,
     **kwargs
 ):
-
     mean = np.mean(security_returns[:estimation_size])
     residuals = np.array(security_returns) - mean
     df = estimation_size - 1
     var = [np.var(residuals)] * event_window_size
-
-    if keep_model:
-        return residuals[-event_window_size:], df, var, mean
-    else:
-        return residuals[-event_window_size:], df, var
+    return residuals[-event_window_size:], df, var, mean
 
 
-def FamaFrench_5factor(
+def market_adjusted_model(
+    security_returns,
+    Mkt_RF,
+    *,  # Named arguments only
+    estimation_size: int,
+    event_window_size: int,
+    **kwargs
+):
+    X = np.array(security_returns)
+    Y = np.array(Mkt_RF)
+    residuals = Y - X
+    df = estimation_size - 1
+    var = [np.var(residuals)] * event_window_size
+    return residuals[-event_window_size:], df, var, X[-event_window_size:]
+
+
+def ordinary_returns_model(
+    security_returns,
+    *,  # Named arguments only
+    estimation_size: int,
+    event_window_size: int,
+    **kwargs
+):
+    X = np.array(security_returns)
+    Y = np.array([0] * len(X))
+    residuals = X - Y
+    df = estimation_size - 1
+    var = [np.var(residuals)] * event_window_size
+    return residuals[-event_window_size:], df, var, X[-event_window_size:]
+
+
+def fama_french_5(
     security_returns,
     Mkt_RF,
     SMB,
@@ -138,30 +153,41 @@ def FamaFrench_5factor(
     *,  # Named arguments only
     estimation_size: int,
     event_window_size: int,
-    keep_model: bool = False,
     **kwargs
 ):
 
     RF = np.array(RF)
     Mkt_RF = np.array(Mkt_RF)
     security_returns = np.array(security_returns)
-
     X = np.column_stack((Mkt_RF, SMB, HML, RMW, CMA))
     Y = np.array(security_returns) - np.array(RF)
+    residuals, df, var_res, model = Model(
+        estimation_size,
+        event_window_size).OLS(
+            X, Y)
+    var = [var_res] * event_window_size
+    return residuals, df, var, model
 
-    if keep_model:
-        residuals, df, var_res, model = Model(estimation_size, event_window_size, keep_model).OLS(
-            X, Y
-        )
-
-        var = [var_res] * event_window_size
-
-        return residuals, df, var, model
-    else:
-        residuals, df, var_res = Model(estimation_size, event_window_size, keep_model).OLS(
-            X, Y
-        )
-
-        var = [var_res] * event_window_size
-
-        return residuals, df, var
+def carhart(
+    security_returns,
+    Mkt_RF,
+    SMB,
+    HML,
+    RF,
+    MOM,
+    *,  # Named arguments only
+    estimation_size: int,
+    event_window_size: int,
+    **kwargs
+):
+    RF = np.array(RF)
+    Mkt_RF = np.array(Mkt_RF)
+    daily_ret = np.array(security_returns)
+    X = np.column_stack((Mkt_RF, SMB, HML, MOM))
+    Y = np.array(security_returns) - np.array(RF)
+    residuals, df, var_res, model = Model(
+        estimation_size,
+        event_window_size).OLS(
+            X, Y)
+    var = [var_res] * event_window_size
+    return residuals, df, var, model 

@@ -97,7 +97,7 @@ def get_date_idx(X, date: np.datetime64, n: int = 5):
             date += np.timedelta64(1, "D")
     return idx
 
-def get_logreturns():
+def get_logreturns(s3: bool=True):
     try:
         storage_options = {}
         storage_options['AWS_REGION'] = 'us-east-1'
@@ -279,37 +279,22 @@ def insert_quotes_history(date: np.datetime64=np.datetime64(datetime.date.today(
         raise FutureDateError(date)
 
     quotes_sql = """
-        select cid,
-            shareclassid,
-            cusip,
+        select 
             ticker,
             trade_date,
             open,
             high,
             low,
             close,
-            volume,
-            adjopen,
-            adjhigh,
-            adjlow,
             adjclose,
-            adjvolume,
-            sharesout,
-            avg30dayvolume,
-            edited,
-            ignored,
-            cumprice_factor,
-            cumshares_factor,
-            divamount,
-            dailygain,
-            dailyreturn
+            volume
         from quotes
         where trade_date = %s
         order by cid
         """
     
     quotes_dtypes = {
-        "security_ticker": np.str_,
+        "ticker": np.str_,
         "trade_date": np.datetime64,
         "open": np.float64,
         "high": np.float64,
